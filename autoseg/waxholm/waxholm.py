@@ -32,7 +32,14 @@ try:
     import SimpleITK as sitk
 except:
     slicer.util.pip_install('SimpleITK')
-    import import SimpleITK as sitk
+    import SimpleITK as sitk
+    
+# wtk
+try:
+    import vtk
+except:
+    slicer.util.pip_install('vtk')
+    import vtk
     
 from slicer.ScriptedLoadableModule import (
     ScriptedLoadableModule,
@@ -127,6 +134,12 @@ class waxholmWidget(ScriptedLoadableModuleWidget):
         subject = self.subjectSelector.currentNode()
         atlas = self.atlasSelector.currentNode()
         labels = self.labelSelector.currentNode()
+        
+        """ # debug
+        print("SUBJECT:", subject.GetName(), subject.GetClassName())
+        print("ATLAS:", atlas.GetName(), atlas.GetClassName())
+        print("LABELS:", labels.GetName(), labels.GetClassName())
+        """
 
         labelId = self.regionCombo.currentData
 
@@ -135,7 +148,8 @@ class waxholmWidget(ScriptedLoadableModuleWidget):
             atlas,
             labels,
             labelId,
-            exportQC=self.exportQC.checked
+            exportQC = self.exportQC.checked,
+            do_affine = self.affine.checked
         )
 
 
@@ -193,7 +207,8 @@ class waxholmLogic(ScriptedLoadableModuleLogic):
         atlasVolumeNode,
         atlasLabelNode,
         labelId,
-        exportQC=False,
+        exportQC = False,
+        do_affine = False
     ):
 
         subjectArray = slicer.util.arrayFromVolume(
@@ -213,7 +228,58 @@ class waxholmLogic(ScriptedLoadableModuleLogic):
         # Read with SimpleITK
         atlas_t2_sitk = sitk.GetImageFromArray(atlasArray)
         mri_sitk = sitk.GetImageFromArray(subjectArray)
-        mask_sitk = sitk.GetImageFromArray(mask)
+        
+        atlas_t2_sitk = sitk.Cast(atlas_t2_sitk, sitk.sitkFloat32) # debugging CenteredTransformInitializer
+        mri_sitk = sitk.Cast(mri_sitk, sitk.sitkFloat32)
+        
+        atlas_t2_sitk.SetSpacing(atlasVolumeNode.GetSpacing())
+        atlas_t2_sitk.SetOrigin(atlasVolumeNode.GetOrigin())
+
+        mri_sitk.SetSpacing(subjectVolumeNode.GetSpacing())
+        mri_sitk.SetOrigin(subjectVolumeNode.GetOrigin())
+        
+        atlas_t2_sitk.SetDirection(
+            getDirectionFromVolumeNode(atlasVolumeNode)
+        )
+
+        mri_sitk.SetDirection(
+            getDirectionFromVolumeNode(subjectVolumeNode)
+        )
+        
+        """ # debug
+        print("================================")
+        print("Subject array shape:", subjectArray.shape)
+        print("Atlas array shape:", atlasArray.shape)
+        print("Label array shape:", labelArray.shape)
+
+        print("Subject dtype:", subjectArray.dtype)
+        print("Atlas dtype:", atlasArray.dtype)
+
+        print("Subject SITK dimension:", mri_sitk.GetDimension())
+        print("Atlas SITK dimension:", atlas_t2_sitk.GetDimension())
+
+        print("Subject SITK size:", mri_sitk.GetSize())
+        print("Atlas SITK size:", atlas_t2_sitk.GetSize())
+
+        print("Subject node class:", subjectVolumeNode.GetClassName())
+        print("Atlas node class:", atlasVolumeNode.GetClassName())
+        print("================================")
+        
+        print("Subject PixelID:", mri_sitk.GetPixelIDTypeAsString())
+        print("Atlas PixelID:", atlas_t2_sitk.GetPixelIDTypeAsString())
+        
+        print("Subject spacing:", mri_sitk.GetSpacing())
+        print("Atlas spacing:", atlas_t2_sitk.GetSpacing())
+        
+        print("Subject dimension:", mri_sitk.GetDimension())
+        print("Atlas dimension:", atlas_t2_sitk.GetDimension())
+
+        print("Subject components:", mri_sitk.GetNumberOfComponentsPerPixel())
+        print("Atlas components:", atlas_t2_sitk.GetNumberOfComponentsPerPixel())
+
+        print("MRI type:", mri_sitk)
+        print("Atlas type:", atlas_t2_sitk)
+        """
 
         # Initial alignment (centered)
         initial_tx = sitk.CenteredTransformInitializer(
@@ -240,7 +306,6 @@ class waxholmLogic(ScriptedLoadableModuleLogic):
         print("Rigid registration done. Metric:", reg.GetMetricValue())
 
         # (Optional) Affine refinement
-        do_affine = self.affine.checked  # set to True based on checkbox
         if do_affine:
             affine = sitk.AffineTransform(final_rigid)
             reg2 = sitk.ImageRegistrationMethod()
@@ -257,7 +322,7 @@ class waxholmLogic(ScriptedLoadableModuleLogic):
 
         # Resample to MRI space using nearest-neighbor (preserve labels)
         resampledMask = sitk.Resample(
-            mask_sitk,
+            atlas_t2_sitk,
             mri_sitk,
             final_rigid,
             sitk.sitkNearestNeighbor,
@@ -297,3 +362,17 @@ class waxholmLogic(ScriptedLoadableModuleLogic):
         slicer.mrmlScene.RemoveNode(labelmapNode)
 
         return segNode
+
+def getDirectionFromVolumeNode(volumeNode):
+    """
+    helper function
+    """
+    
+    m = vtk.vtkMatrix4x4()
+    volumeNode.GetIJKToRASDirectionMatrix(m)
+
+    return (
+        m.GetElement(0,0), m.GetElement(0,1), m.GetElement(0,2),
+        m.GetElement(1,0), m.GetElement(1,1), m.GetElement(1,2),
+        m.GetElement(2,0), m.GetElement(2,1), m.GetElement(2,2),
+    )
