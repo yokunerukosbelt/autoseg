@@ -1,317 +1,299 @@
-import logging
+# IMPORTS 
 import os
-from typing import Annotated
-
-import vtk
-
+import re
+import numpy as np
 import slicer
-from slicer.i18n import tr as _
-from slicer.i18n import translate
-from slicer.ScriptedLoadableModule import *
-from slicer.util import VTKObservationMixin
-from slicer.parameterNodeWrapper import (
-    parameterNodeWrapper,
-    WithinRange,
+import qt
+import ctk
+
+# numpy
+try:
+    import numpy as np
+except:
+    slicer.util.pip_install('nibabel')
+    import numpy as np
+
+# nibabel
+try:
+    import nibabel as nib
+except:
+    slicer.util.pip_install('nibabel')
+    import nibabel as nib
+
+# matplotlib
+try:
+    import matplotlib.pyplot as plt
+except:
+    slicer.util.pip_install('matplotlib')
+    import matplotlib.pyplot as plt
+
+# SimpleITK 
+try:
+    import SimpleITK as sitk
+except:
+    slicer.util.pip_install('SimpleITK')
+    import import SimpleITK as sitk
+    
+from slicer.ScriptedLoadableModule import (
+    ScriptedLoadableModule,
+    ScriptedLoadableModuleWidget,
+    ScriptedLoadableModuleLogic,
 )
-
-from slicer import vtkMRMLScalarVolumeNode
-
-# imports from original Google Colab notebook
-import nibabel as nib, numpy as np, matplotlib.pyplot as plt
-import SimpleITK as sitk
-from ipywidgets import interact, IntSlider, fixed
-
-
-
-"""
-module description here
-# cutes
-"""
 
 
 class waxholm(ScriptedLoadableModule):
-    """Uses ScriptedLoadableModule base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
     """
-
+    description
+    """
+    
     def __init__(self, parent):
-        ScriptedLoadableModule.__init__(self, parent)
-        self.parent.title = _("Waxholm Atlas Auto Segmenter")
-        self.parent.categories = [translate("qSlicerAbstractCoreModule", "Examples")] # TODO: set categories (folders where the module shows up in the module selector)
-        self.parent.dependencies = []  # N/A
-        self.parent.contributors = ["Charley Batte (UGA)"]  # TODO: replace with "Firstname Lastname (Organization)"
-        
-        # TODO: update with short description of the module and a link to online module documentation
-        # _() function marks text as translatable to other languages
-        self.parent.helpText = _("""
-        This is an example of scripted loadable module bundled in an extension.
-        See more information in <a href="https://github.com/organization/projectname#waxholm">module documentation</a>.
-        """)
-        
-        # TODO: replace with organization, grant and thanks
-        self.parent.acknowledgementText = _("""
-        This file was originally developed by Jean-Christophe Fillion-Robin, Kitware Inc., Andras Lasso, PerkLab,
-        and Steve Pieper, Isomics, Inc. and was partially funded by NIH grant 3P41RR013218-12S1.
-        """)
-
-        # Additional initialization step after application startup is complete
-        slicer.app.connect("startupCompleted()", registerSampleData)
+        super().__init__(parent)
+        self.parent.title = "Waxholm Atlas Auto Segmenter"
+        self.parent.categories = ["Segmentation"]
+        self.parent.contributors = ["Generated from notebook workflow"]
 
 
-#
-# waxholmWidget
-#
+class waxholmWidget(ScriptedLoadableModuleWidget):
 
+    def setup(self):
+        super().setup()
 
-class waxholmWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
-    """Uses ScriptedLoadableModuleWidget base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
-    """
-
-    def __init__(self, parent=None) -> None:
-        """Called when the user opens the module the first time and the widget is initialized."""
-        ScriptedLoadableModuleWidget.__init__(self, parent)
-        VTKObservationMixin.__init__(self)  # needed for parameter node observation
-        self.logic = None
-        self._parameterNode = None
-        self._parameterNodeGuiTag = None
-
-    def setup(self) -> None:
-        """Called when the user opens the module the first time and the widget is initialized."""
-        ScriptedLoadableModuleWidget.setup(self)
-
-        # Load widget from .ui file (created by Qt Designer).
-        # Additional widgets can be instantiated manually and added to self.layout.
-        uiWidget = slicer.util.loadUI(self.resourcePath("UI/waxholm.ui"))
-        self.layout.addWidget(uiWidget)
-        self.ui = slicer.util.childWidgetVariables(uiWidget)
-
-        # Set scene in MRML widgets. Make sure that in Qt designer the top-level qMRMLWidget's
-        # "mrmlSceneChanged(vtkMRMLScene*)" signal in is connected to each MRML widget's.
-        # "setMRMLScene(vtkMRMLScene*)" slot.
-        uiWidget.setMRMLScene(slicer.mrmlScene)
-
-        # Create logic class. Logic implements all computations that should be possible to run
-        # in batch mode, without a graphical user interface.
         self.logic = waxholmLogic()
 
-        # Connections
+        form = qt.QFormLayout()
 
-        # These connections ensure that we update parameter node when scene is closed
-        self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
-        self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
+        self.subjectSelector = slicer.qMRMLNodeComboBox()
+        self.subjectSelector.nodeTypes = ["vtkMRMLScalarVolumeNode"]
+        self.subjectSelector.setMRMLScene(slicer.mrmlScene)
+        form.addRow("Subject MRI", self.subjectSelector)
 
-        # Buttons
-        self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
+        self.atlasSelector = slicer.qMRMLNodeComboBox()
+        self.atlasSelector.nodeTypes = ["vtkMRMLScalarVolumeNode"]
+        self.atlasSelector.setMRMLScene(slicer.mrmlScene)
+        form.addRow("Atlas MRI", self.atlasSelector)
 
-        # Make sure parameter node is initialized (needed for module reload)
-        self.initializeParameterNode()
+        self.labelSelector = slicer.qMRMLNodeComboBox()
+        self.labelSelector.nodeTypes = ["vtkMRMLLabelMapVolumeNode",
+                                        "vtkMRMLScalarVolumeNode"]
+        self.labelSelector.setMRMLScene(slicer.mrmlScene)
+        form.addRow("Atlas Label Volume", self.labelSelector)
 
-    def cleanup(self) -> None:
-        """Called when the application closes and the module widget is destroyed."""
-        self.removeObservers()
+        self.labelFilePicker = ctk.ctkPathLineEdit()
+        form.addRow("Waxholm .label file", self.labelFilePicker)
 
-    def enter(self) -> None:
-        """Called each time the user opens this module."""
-        # Make sure parameter node exists and observed
-        self.initializeParameterNode()
+        self.loadStructuresButton = qt.QPushButton("Load Structures")
+        form.addRow(self.loadStructuresButton)
 
-    def exit(self) -> None:
-        """Called each time the user opens a different module."""
-        # Do not react to parameter node changes (GUI will be updated when the user enters into the module)
-        if self._parameterNode:
-            self._parameterNode.disconnectGui(self._parameterNodeGuiTag)
-            self._parameterNodeGuiTag = None
-            self.removeObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
+        self.regionCombo = qt.QComboBox()
+        form.addRow("Region", self.regionCombo)
 
-    def onSceneStartClose(self, caller, event) -> None:
-        """Called just before the scene is closed."""
-        # Parameter node will be reset, do not use it anymore
-        self.setParameterNode(None)
+        self.exportQC = qt.QCheckBox("Export JPEG QC Images")
+        form.addRow(self.exportQC)
+        
+        self.affine = qt.QCheckBox("Use Affine Registration")
+        form.addRow(self.affine)
 
-    def onSceneEndClose(self, caller, event) -> None:
-        """Called just after the scene is closed."""
-        # If this module is shown while the scene is closed then recreate a new parameter node immediately
-        if self.parent.isEntered:
-            self.initializeParameterNode()
+        self.generateButton = qt.QPushButton("Generate Segmentation")
+        form.addRow(self.generateButton)
 
-    def initializeParameterNode(self) -> None:
-        """Ensure parameter node exists and observed."""
-        # Parameter node stores all user choices in parameter values, node selections, etc.
-        # so that when the scene is saved and reloaded, these settings are restored.
+        self.layout.addLayout(form)
+        self.layout.addStretch(1)
 
-        self.setParameterNode(self.logic.getParameterNode())
+        self.loadStructuresButton.connect(
+            "clicked()",
+            self.onLoadStructures
+        )
 
-        # Select default input nodes if nothing is selected yet to save a few clicks for the user
-        if not self._parameterNode.inputVolume:
-            firstVolumeNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
-            if firstVolumeNode:
-                self._parameterNode.inputVolume = firstVolumeNode
+        self.generateButton.connect(
+            "clicked()",
+            self.onGenerate
+        )
 
-    def setParameterNode(self, inputParameterNode: waxholmParameterNode | None) -> None:
-        """
-        Set and observe parameter node.
-        Observation is needed because when the parameter node is changed then the GUI must be updated immediately.
-        """
+    def onLoadStructures(self):
 
-        if self._parameterNode:
-            self._parameterNode.disconnectGui(self._parameterNodeGuiTag)
-            self.removeObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
-        self._parameterNode = inputParameterNode
-        if self._parameterNode:
-            # Note: in the .ui file, a Qt dynamic property called "SlicerParameterName" is set on each
-            # ui element that needs connection.
-            self._parameterNodeGuiTag = self._parameterNode.connectGui(self.ui)
-            self.addObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
-            self._checkCanApply()
+        self.regionCombo.clear()
 
-    def _checkCanApply(self, caller=None, event=None) -> None:
-        if self._parameterNode and self._parameterNode.inputVolume and self._parameterNode.thresholdedVolume:
-            self.ui.applyButton.toolTip = _("Compute output volume")
-            self.ui.applyButton.enabled = True
-        else:
-            self.ui.applyButton.toolTip = _("Select input and output volume nodes")
-            self.ui.applyButton.enabled = False
+        path = self.labelFilePicker.currentPath
+        structures = self.logic.parseLabelFile(path)
 
-    def onApplyButton(self) -> None:
-        """Run processing when user clicks "Apply" button."""
-        with slicer.util.tryWithErrorDisplay(_("Failed to compute results."), waitCursor=True):
-            # Compute output
-            self.logic.process(self.ui.inputSelector.currentNode(), self.ui.outputSelector.currentNode(),
-                               self.ui.imageThresholdSliderWidget.value, self.ui.invertOutputCheckBox.checked)
+        for labelId, name in structures:
+            self.regionCombo.addItem(
+                f"{name} ({labelId})",
+                labelId
+            )
 
-            # Compute inverted output (if needed)
-            if self.ui.invertedOutputSelector.currentNode():
-                # If additional output volume is selected then result with inverted threshold is written there
-                self.logic.process(self.ui.inputSelector.currentNode(), self.ui.invertedOutputSelector.currentNode(),
-                                   self.ui.imageThresholdSliderWidget.value, not self.ui.invertOutputCheckBox.checked, showResult=False)
+    def onGenerate(self):
 
+        subject = self.subjectSelector.currentNode()
+        atlas = self.atlasSelector.currentNode()
+        labels = self.labelSelector.currentNode()
 
-#
-# waxholmLogic
-#
+        labelId = self.regionCombo.currentData
+
+        self.logic.generateSegmentation(
+            subject,
+            atlas,
+            labels,
+            labelId,
+            exportQC=self.exportQC.checked
+        )
 
 
 class waxholmLogic(ScriptedLoadableModuleLogic):
-    """This class should implement all the actual
-    computation done by your module.  The interface
-    should be such that other python code can import
-    this class and make use of the functionality without
-    requiring an instance of the Widget.
-    Uses ScriptedLoadableModuleLogic base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
     """
-
-    def __init__(self) -> None:
-        """Called when the logic class is instantiated. Can be used for initializing member variables."""
-        ScriptedLoadableModuleLogic.__init__(self)
-
-    def getParameterNode(self):
-        return waxholmParameterNode(super().getParameterNode())
-
-    def process(self,
-                inputVolume: vtkMRMLScalarVolumeNode,
-                outputVolume: vtkMRMLScalarVolumeNode,
-                imageThreshold: float,
-                invert: bool = False,
-                showResult: bool = True) -> None:
-        """
-        Run the processing algorithm.
-        Can be used without GUI widget.
-        :param inputVolume: volume to be thresholded
-        :param outputVolume: thresholding result
-        :param imageThreshold: values above/below this threshold will be set to 0
-        :param invert: if True then values above the threshold will be set to 0, otherwise values below are set to 0
-        :param showResult: show output volume in slice viewers
-        """
-
-        if not inputVolume or not outputVolume:
-            raise ValueError("Input or output volume is invalid")
-
-        import time
-
-        startTime = time.time()
-        logging.info("Processing started")
-
-        # Compute the thresholded output volume using the "Threshold Scalar Volume" CLI module
-        cliParams = {
-            "InputVolume": inputVolume.GetID(),
-            "OutputVolume": outputVolume.GetID(),
-            "ThresholdValue": imageThreshold,
-            "ThresholdType": "Above" if invert else "Below",
-        }
-        cliNode = slicer.cli.run(slicer.modules.thresholdscalarvolume, None, cliParams, wait_for_completion=True, update_display=showResult)
-        # We don't need the CLI module node anymore, remove it to not clutter the scene with it
-        slicer.mrmlScene.RemoveNode(cliNode)
-
-        stopTime = time.time()
-        logging.info(f"Processing completed in {stopTime-startTime:.2f} seconds")
-
-
-#
-# waxholmTest
-#
-
-
-class waxholmTest(ScriptedLoadableModuleTest):
+    meow
     """
-    This is the test case for your scripted module.
-    Uses ScriptedLoadableModuleTest base class, available at:
-    https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
+    
+    def parseLabelFile(self, filename):
+
+        structures = []
+
+        if not os.path.exists(filename):
+            return structures
+
+        with open(filename, "r", errors="ignore") as f:
+
+            for line in f:
+
+                nums = re.findall(r"\d+", line)
+
+                if len(nums) < 1:
+                    continue
+
+                try:
+                    labelId = int(nums[0])
+                except:
+                    continue
+
+                text = line.strip()
+
+                structures.append((labelId, text))
+
+        return structures
+    
     """
+    meow
+    """
+    def registration(
+        self,
+        subjectVolumeNode,
+        atlasVolumeNode,
+        atlasLabelNode,
+        labelId,
+    ):
+        pass
+        
+        
+    """
+    meow
+    """ 
+    def generateSegmentation(
+        self,
+        subjectVolumeNode,
+        atlasVolumeNode,
+        atlasLabelNode,
+        labelId,
+        exportQC=False,
+    ):
 
-    def setUp(self):
-        """Do whatever is needed to reset the state - typically a scene clear will be enough."""
-        slicer.mrmlScene.Clear()
+        subjectArray = slicer.util.arrayFromVolume(
+            subjectVolumeNode
+        )
 
-    def runTest(self):
-        """Run as few or as many tests as needed here."""
-        self.setUp()
-        self.test_waxholm1()
+        atlasArray = slicer.util.arrayFromVolume(
+            atlasVolumeNode
+        )
 
-    def test_waxholm1(self):
-        """Ideally you should have several levels of tests.  At the lowest level
-        tests should exercise the functionality of the logic with different inputs
-        (both valid and invalid).  At higher levels your tests should emulate the
-        way the user would interact with your code and confirm that it still works
-        the way you intended.
-        One of the most important features of the tests is that it should alert other
-        developers when their changes will have an impact on the behavior of your
-        module.  For example, if a developer removes a feature that you depend on,
-        your test should break so they know that the feature is needed.
-        """
+        labelArray = slicer.util.arrayFromVolume(
+            atlasLabelNode
+        )
 
-        self.delayDisplay("Starting the test")
+        mask = (labelArray == int(labelId)).astype(np.uint8)
 
-        # Get/create input data
+        # Read with SimpleITK
+        atlas_t2_sitk = sitk.GetImageFromArray(atlasArray)
+        mri_sitk = sitk.GetImageFromArray(subjectArray)
+        mask_sitk = sitk.GetImageFromArray(mask)
 
-        import SampleData
+        # Initial alignment (centered)
+        initial_tx = sitk.CenteredTransformInitializer(
+            mri_sitk,
+            atlas_t2_sitk,
+            sitk.Euler3DTransform(),
+            sitk.CenteredTransformInitializerFilter.GEOMETRY
+        )
 
-        registerSampleData()
-        inputVolume = SampleData.downloadSample("waxholm1")
-        self.delayDisplay("Loaded test data set")
+        # Set up registration (Mattes MI + gradient descent)
+        reg = sitk.ImageRegistrationMethod()
+        reg.SetMetricAsMattesMutualInformation(50)
+        reg.SetMetricSamplingStrategy(reg.RANDOM)
+        reg.SetMetricSamplingPercentage(0.2)
+        reg.SetInterpolator(sitk.sitkLinear)
+        reg.SetOptimizerAsRegularStepGradientDescent(learningRate=2.0,
+                                                     minStep=1e-4,
+                                                     numberOfIterations=200,
+                                                     relaxationFactor=0.5)
+        reg.SetOptimizerScalesFromPhysicalShift()
+        reg.SetInitialTransform(initial_tx, inPlace=False)
 
-        inputScalarRange = inputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(inputScalarRange[0], 0)
-        self.assertEqual(inputScalarRange[1], 695)
+        final_rigid = reg.Execute(mri_sitk, atlas_t2_sitk)
+        print("Rigid registration done. Metric:", reg.GetMetricValue())
 
-        outputVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
-        threshold = 100
+        # (Optional) Affine refinement
+        do_affine = self.affine.checked  # set to True based on checkbox
+        if do_affine:
+            affine = sitk.AffineTransform(final_rigid)
+            reg2 = sitk.ImageRegistrationMethod()
+            reg2.SetMetricAsMattesMutualInformation(50)
+            reg2.SetMetricSamplingStrategy(reg2.RANDOM)
+            reg2.SetMetricSamplingPercentage(0.2)
+            reg2.SetInterpolator(sitk.sitkLinear)
+            reg2.SetOptimizerAsRegularStepGradientDescent(1.0, 1e-4, 200, 0.5)
+            reg2.SetInitialTransform(affine, inPlace=False)
+            final_tx = reg2.Execute(mri_sitk, atlas_t2_sitk)
+            print("Affine refinement done. Metric: ", reg2.GetMetricValue())
+        else:
+            final_tx = final_rigid
 
-        # Test the module logic
+        # Resample to MRI space using nearest-neighbor (preserve labels)
+        resampledMask = sitk.Resample(
+            mask_sitk,
+            mri_sitk,
+            final_rigid,
+            sitk.sitkNearestNeighbor,
+            0, # default pixel value
+            sitk.sitkUInt8)
 
-        logic = waxholmLogic()
+        maskMRI = sitk.GetArrayFromImage(resampledMask).astype(np.uint8)
 
-        # Test algorithm with non-inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, True)
-        outputScalarRange = outputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(outputScalarRange[0], inputScalarRange[0])
-        self.assertEqual(outputScalarRange[1], threshold)
+        labelmapNode = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLLabelMapVolumeNode",
+            "WaxholmMask"
+        )
 
-        # Test algorithm with inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, False)
-        outputScalarRange = outputVolume.GetImageData().GetScalarRange()
-        self.assertEqual(outputScalarRange[0], inputScalarRange[0])
-        self.assertEqual(outputScalarRange[1], inputScalarRange[1])
+        slicer.util.updateVolumeFromArray(
+            labelmapNode,
+            maskMRI
+        )
 
-        self.delayDisplay("Test passed")
+        labelmapNode.CopyOrientation(subjectVolumeNode)
+
+        segNode = slicer.mrmlScene.AddNewNodeByClass(
+            "vtkMRMLSegmentationNode",
+            f"Label_{labelId}"
+        )
+
+        segNode.SetReferenceImageGeometryParameterFromVolumeNode(
+            subjectVolumeNode
+        )
+
+        slicer.modules.segmentations.logic().ImportLabelmapToSegmentationNode(
+            labelmapNode,
+            segNode
+        )
+
+        segNode.CreateClosedSurfaceRepresentation()
+
+        slicer.mrmlScene.RemoveNode(labelmapNode)
+
+        return segNode
