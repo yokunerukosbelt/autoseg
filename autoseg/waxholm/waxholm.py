@@ -134,14 +134,18 @@ class waxholmWidget(ScriptedLoadableModuleWidget):
         subject = self.subjectSelector.currentNode()
         atlas = self.atlasSelector.currentNode()
         labels = self.labelSelector.currentNode()
-        
-        """ # debug
-        print("SUBJECT:", subject.GetName(), subject.GetClassName())
-        print("ATLAS:", atlas.GetName(), atlas.GetClassName())
-        print("LABELS:", labels.GetName(), labels.GetClassName())
-        """
 
         labelId = self.regionCombo.currentData
+        
+        # FIX: retrieve as string (matches how it was stored), then convert
+        labelId = self.regionCombo.currentData
+        if labelId is None:
+            slicer.util.errorDisplay("No region selected.")
+            return
+
+        labelId = int(labelId)
+
+        print(f"Running segmentation for label ID: {labelId}")
 
         self.logic.generateSegmentation(
             subject,
@@ -223,7 +227,16 @@ class waxholmLogic(ScriptedLoadableModuleLogic):
             atlasLabelNode
         )
 
+        # Creating mask for the specified label ID
         mask = (labelArray == int(labelId)).astype(np.uint8)
+        
+        mask_sitk = sitk.GetImageFromArray(mask.astype(np.uint8))
+
+        mask_sitk.SetSpacing(atlasLabelNode.GetSpacing())
+        mask_sitk.SetOrigin(atlasLabelNode.GetOrigin())
+        mask_sitk.SetDirection(
+            getDirectionFromVolumeNode(atlasLabelNode)
+        )
 
         # Read with SimpleITK
         atlas_t2_sitk = sitk.GetImageFromArray(atlasArray)
@@ -322,13 +335,15 @@ class waxholmLogic(ScriptedLoadableModuleLogic):
 
         # Resample to MRI space using nearest-neighbor (preserve labels)
         resampledMask = sitk.Resample(
-            atlas_t2_sitk,
+            mask_sitk,
             mri_sitk,
-            final_rigid,
+            final_tx,
             sitk.sitkNearestNeighbor,
-            0, # default pixel value
-            sitk.sitkUInt8)
+            0,
+            sitk.sitkUInt8
+        )
 
+        # who knows what's happening after here
         maskMRI = sitk.GetArrayFromImage(resampledMask).astype(np.uint8)
 
         labelmapNode = slicer.mrmlScene.AddNewNodeByClass(
